@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	// "encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/fvbock/endless"
+	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -18,8 +19,9 @@ import (
 
 type Person struct {
 	ID        primitive.ObjectID `json:"_id,omitempty" bson:"_id,omitempty"`
-	Firstname string             `json:"firstname,omitempty, bson:"firstname,omitempty"`
-	Lastname  string             `json:"lastname,omitempty, bson:"lastname,omitempty"`
+	Firstname string             `json:"firstname,omitempty", bson:"firstname,omitempty"`
+	Lastname  string             `json:"lastname,omitempty", bson:"lastname,omitempty"`
+	Role      string             `json:"role,omitempty", bson:"role,omitempty"`
 }
 
 var client *mongo.Client
@@ -35,37 +37,37 @@ func main() {
 }
 
 func handleRequests() {
-	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/person", CreatePersonEndpoint).Methods("POST")
-	router.HandleFunc("/person", GetPeopleEndpoint)
-	router.HandleFunc("/person/{id}", GetPersonEndpoint)
+	// Creates a gin router with default middleware:
+	// logger and recovery (crash-free) middleware
+	router := gin.Default()
 
-	log.Fatal(http.ListenAndServe(":1234", router))
+	router.GET("/person", GetPeopleEndpoint)
+	router.GET("/person/:id", GetPersonEndpoint)
+	router.POST("/person", CreatePersonEndpoint)
+	// router.PUT("/somePut", putting)
+	// router.DELETE("/someDelete", deleting)
+	// router.PATCH("/somePatch", patching)
+	// router.HEAD("/someHead", head)
+	// router.OPTIONS("/someOptions", options)
+
+	router.GET("/ping", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "pong",
+		})
+	})
+	router.Run(":8080") // listen and serve on 0.0.0.0:8080
+	log.Fatal(endless.ListenAndServe(":4242", router))
 }
-
-func CreatePersonEndpoint(response http.ResponseWriter, request *http.Request) {
-	response.Header().Add("content-type", "Applicatioin/json")
-
-	var person Person
-	json.NewDecoder(request.Body).Decode(&person)
-	collection := client.Database("goDatabase").Collection("people")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	result, _ := collection.InsertOne(ctx, person)
-	json.NewEncoder(response).Encode(result)
-}
-
-func GetPeopleEndpoint(response http.ResponseWriter, request *http.Request) {
-	response.Header().Add("content-type", "Applicatioin/json")
-
+func GetPeopleEndpoint(c *gin.Context) {
 	var people []Person
 	collection := client.Database("goDatabase").Collection("people")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := collection.Find(ctx, bson.M{})
 	if err != nil {
-		response.WriteHeader(http.StatusInternalServerError)
-		response.Write([]byte(`{ "message:" "` + err.Error() + `"}`))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": err.Error(),
+		})
 		return
 	}
 	defer cursor.Close(ctx)
@@ -75,18 +77,41 @@ func GetPeopleEndpoint(response http.ResponseWriter, request *http.Request) {
 		people = append(people, person)
 	}
 	if err := cursor.Err(); err != nil {
-		response.WriteHeader(http.StatusInternalServerError)
-		response.Write([]byte(`{ "message:" "` + err.Error() + `"}`))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": err.Error(),
+		})
 		return
 	}
-
-	json.NewEncoder(response).Encode(people)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "success",
+		"data":    people,
+	})
 }
 
-func GetPersonEndpoint(response http.ResponseWriter, request *http.Request) {
-	response.Header().Add("content-type", "Applicatioin/json")
-	params := mux.Vars(request)
-	id, _ := primitive.ObjectIDFromHex(params["id"])
+func CreatePersonEndpoint(c *gin.Context) {
+
+	var person Person
+	if c.ShouldBind(&person) == nil { // bind data in post request for json or xml
+		// log.Println(person.Firstname)
+		// log.Println(person.Lastname)
+
+		collection := client.Database("goDatabase").Collection("people")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result, _ := collection.InsertOne(ctx, person)
+		c.JSON(http.StatusOK, gin.H{
+			"message": "success",
+			"data":    result,
+		})
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "No data posted",
+		})
+	}
+}
+
+func GetPersonEndpoint(c *gin.Context) {
+	id, _ := primitive.ObjectIDFromHex(c.Param("id"))
 
 	var person Person
 
@@ -96,12 +121,15 @@ func GetPersonEndpoint(response http.ResponseWriter, request *http.Request) {
 
 	err := collection.FindOne(ctx, bson.D{{"_id", id}}).Decode(&person)
 	if err != nil {
-		response.WriteHeader(http.StatusInternalServerError)
 		fmt.Println("record does not exist")
 		fmt.Println(err, id)
-		// response.Write([]byte(`{ "message:" "` + err.Error() + `"}`))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": err.Error(),
+		})
 		return
 	}
-
-	json.NewEncoder(response).Encode(person)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "success",
+		"data":    person,
+	})
 }
